@@ -1,10 +1,10 @@
 %% Estimate distortion for ExM samples
 % 
 % Pipeline:
-%   Register expanded image to non-expanded image using scale, rotation, and translation
-%   Find "best" transformation
-%       Consider all combinations of images to match depth
-%       Use transformation from best matching channel or take mean
+%   Align planes
+%       Register expanded image to non-expanded image using scale, rotation, and translation
+%       Find "best" transformation
+%           Use transformation from best matching channel or take mean
 %   Calculate expansion factor
 %   Apply non-rigid registration to scaled image to find local distortions
 %   
@@ -20,54 +20,65 @@
 
 %% Load data
 
-data_path = '';
-before = loadtiff([data_path, 'BeforeMAPprocedure-Parv488-Syt2-568-vGAT-647-STACK.tif']);
-after = loadtiff([data_path, 'AfterMAPprocedure-Parv488-Syt2-568-vGAT-647-STACK.tif']);
-
-% Separate color channels
-b1 = before(:,:,1:4:end);
-b2 = before(:,:,2:4:end);
-b3 = before(:,:,3:4:end);
-b4 = before(:,:,4:4:end);
-
-a1 = after(:,:,1:4:end);
-a2 = after(:,:,2:4:end);
-a3 = after(:,:,3:4:end);
-a4 = after(:,:,4:4:end);
-
-%% Rigid registration
-% TO DO: register across all combinations of images in z-stack to find
-% which image planes have best correspondence. (Match depth)
-
-fixed = b2(:,:,1);
-moving = a2(:,:,1);
-moving = imhistmatch(moving, fixed);
+dataPath = 'D:\UBC\Databinge\tutor\ExM_Distortion\';
+before = loadtiff([dataPath, 'BeforeMAPprocedure-Parv488-Syt2-568-vGAT-647-STACK.tif']);
+after = loadtiff([dataPath, 'AfterMAPprocedure-Parv488-Syt2-568-vGAT-647-STACK.tif']);
 
 
-% visualize
+%% Separate channels
+
+numChans = 4;
+b = separateChannels(before, numChans);
+a = separateChannels(after, numChans);
+
+%% Find best matching slices for each channel
+
+% note this process takes a very long time
+tic
+[matchingSlices, corrMat] = matchSlices(b, a);
+toc
+
+% matchingSlices = [4, 2; 5, 5;];
+
+figure, 
+for C = 1:numChans    
+    subplot(4,1,C), imagesc(corrMat(:,:,C)), colormap jet;
+    ylabel('before'), xlabel('after'), title(['channel ', num2str(C)])
+    c = colorbar; c.Label.String = 'Correlation';
+end
+
+%% Choose the best channel for further analysis
+
+idx = evaluateMatches(b, a, matchingSlices);
+
+fixed = b(:,:,matchingSlices(idx,1), idx);
+moving = a(:,:,matchingSlices(idx,2), idx);
+
+
+%% Visualize
 excessPixels = size(moving)-size(fixed);
 visFixed = padarray(fixed, excessPixels/2, 0, 'both');
 figure, imagesc([visFixed moving])
 
 
+% register
 [optimizer, metric] = imregconfig('monomodal');
+moving = imhistmatch(moving, fixed);
 tform = imregtform(moving, fixed, 'similarity', optimizer, metric);
 movingRegistered = imwarp(moving,tform,'OutputView',imref2d(size(fixed)));
 
-figure
-imshowpair(fixed, movingRegistered)
+figure, imshowpair(fixed, movingRegistered)
 
 
 % Estimate expansion factor. This assumes expansion is equal in x and y.
 % Check tform.T(1,1) and tform.T(2,2) for expansion in x and y respectively
 expansionFactor = 1/sqrt(det(tform.T)); 
 
-%% register by fitting a displacement field
 
-movingVol = imwarp(a2, tform, 'OutputView', imref2d(size(b2)));
+%% non-rigid registration
 
 
-AFS = 1.0; % AcuumulatedFieldSmoothing
+AFS = 1.0; % AccumulatedFieldSmoothing
 % This parameter controls the amount of diffusion-like regularization.
 % imregdemons applies the standard deviation of the Gaussian smoothing to
 % regularize the accumulated field at each iteration. Larger values result
@@ -81,19 +92,24 @@ AFS = 1.0; % AcuumulatedFieldSmoothing
 
 figure, imshowpair(fixed, movingReg)
 
-%% visualize local distortions 
+%% Visualize local distortions 
 
 % resize for ease of visualization
-simpfixed = imresize(fixed, 1/13);
+% simpfixed = imresize(fixed, 1/13);
+simpfixed = fixed;
 simpD = imresize(D, 1/13);
+% simpD = D;
 
 
-[x,y] = meshgrid(0:1:size(simpfixed,1)-1, 0:1:size(simpfixed,2)-1);
+[x,y] = meshgrid(0:13:size(simpfixed,1)-1, 0:13:size(simpfixed,2)-1);
 u = simpD(:,:,1);
 v = simpD(:,:,2);
 
-figure, quiver(x,y,u,v)
-axis([0, size(simpfixed,2)-1, 0, size(simpfixed,1)-1])
+figure, imshowpair(movingReg, movingRegistered)
+hold on, quiver(x,y,-u,-v)
+% axis([0, size(simpfixed,2)-1, 0, size(simpfixed,1)-1])
+
+
 
 
 %% helper functions
@@ -118,4 +134,83 @@ function I = loadtiff(tiff_file)
     close(wait_bar);
     temps = num2str(round(10*toc)/10);
     disp([tiff_file ' open in ' num2str(temps) 's'])
+end
+
+
+function sepData = separateChannels(data, numChans)
+% separate tif into 4D array
+% sepData is of shape HEIGHT x WIDTH x DEPTH x CHANNEL
+
+sepData = zeros(size(data,1), size(data,2), size(data,3)/numChans, numChans);
+for C = 1:numChans
+    sepData(:,:,:,C) = data(:,:,C:numChans:end);
+end
+
+end
+
+
+
+function [matchingSlices, corrMat] = matchSlices(beforeImg, afterImg)
+% function to match depth based on image correlation after registration
+% input: 
+%   before and after expansion 4D images
+% output:
+%   matching_slices is a 2-element vector containing the slices in b and a
+%   with the highest correlation after registration
+
+[optimizer, metric] = imregconfig('monomodal'); % registration parameters
+
+% pre-allocate
+numChans = size(beforeImg,4);
+corrMat = zeros(size(beforeImg,3), size(afterImg,3), numChans);  
+matchingSlices = zeros(numChans, 2);
+
+% compare all combinations of slices
+for C = 1:numChans
+    for i = 1:size(beforeImg,3)
+        fixed = beforeImg(:,:,i,C);
+
+        parfor j = 1:size(afterImg,3)
+            % prepare images for registration
+            moving = afterImg(:,:,j,C);
+            moving = imhistmatch(moving, fixed);
+
+            % perform registration
+            tform = imregtform(moving, fixed, 'similarity', optimizer, metric);
+            movingRegistered = imwarp(moving,tform,'OutputView',imref2d(size(fixed)));
+
+            % populate correlation matrix
+            corrMat(i, j, C) = corr2(fixed, movingRegistered);
+
+        end
+    end
+    [beforeSlice, afterSlice] = find(corrMat == max(corrMat(:)));
+    matchingSlices(C,:) = [beforeSlice, afterSlice];
+end
+
+end
+
+
+function idx = evaluateMatches(beforeImg, afterImg, matchingSlices)
+% takes pairs of images and matching slices and returns index of
+[optimizer, metric] = imregconfig('monomodal'); % registration parameters
+
+numChans = size(matchingSlices,1);
+imgCorr = zeros(numChans,1);
+for C = 1:numChans
+    
+    fixed = beforeImg(:,:,matchingSlices(C,1),C);
+    moving = afterImg(:,:,matchingSlices(C,2),C);
+    moving = imhistmatch(moving, fixed);
+    
+    
+    tform = imregtform(moving, fixed, 'similarity', optimizer, metric);
+    movingRegistered = imwarp(moving,tform,'OutputView',imref2d(size(fixed)));
+    
+    imgCorr(C) = corr2(fixed, movingRegistered);
+    
+end
+
+[~, idx] = max(imgCorr);
+
 end
