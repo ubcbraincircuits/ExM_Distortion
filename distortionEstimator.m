@@ -33,12 +33,12 @@ a = separateChannels(after, numChans);
 
 %% Find best matching slices for each channel
 
-% note this process takes a very long time
+% note this can take over an hour
 tic
 [matchingSlices, corrMat] = matchSlices(b, a);
 toc
 
-% matchingSlices = [4, 2; 5, 5;];
+% matchingSlices = [4, 2; 5, 5; 1, 12; 9, 11];
 
 figure, 
 for C = 1:numChans    
@@ -49,7 +49,7 @@ end
 
 %% Choose the best channel for further analysis
 
-idx = evaluateMatches(b, a, matchingSlices);
+idx = evaluateMatches(b, a, matchingSlices(1,:));
 
 fixed = b(:,:,matchingSlices(idx,1), idx);
 moving = a(:,:,matchingSlices(idx,2), idx);
@@ -184,7 +184,9 @@ for C = 1:numChans
 
         end
     end
-    [beforeSlice, afterSlice] = find(corrMat == max(corrMat(:)));
+    
+    tmpCorrMat = corrMat(:,:,C);
+    [beforeSlice, afterSlice] = find(tmpCorrMat == max(tmpCorrMat(:)));
     matchingSlices(C,:) = [beforeSlice, afterSlice];
 end
 
