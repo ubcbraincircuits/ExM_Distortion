@@ -22,16 +22,17 @@ clear, clc
 %% Load data
 
 dataPath = 'D:\UBC\Databinge\tutor\ExM_Distortion\';
-before = loadTif([dataPath, 'BeforeMAPprocedure-Parv488-Syt2-568-vGAT-647-STACK.tif']);
-after = loadTif([dataPath, 'AfterMAPprocedure-Parv488-Syt2-568-vGAT-647-STACK.tif']);
+% before = loadTif([dataPath, 'BeforeMAPprocedure-Parv488-Syt2-568-vGAT-647-STACK.tif']);
+% after = loadTif([dataPath, 'AfterMAPprocedure-Parv488-Syt2-568-vGAT-647-STACK.tif']);
 
-
+before = loadTif([dataPath, '61-BeforeStripping.tif']);
+after = loadTif([dataPath, '61-AfterStripping.tif']);
 %% Separate channels
-
-numChans = 4;
-b = uint16(separateChannels(before, numChans));
-a = uint16(separateChannels(after, numChans));
-
+tic
+numChans = 2;
+b = separateChannels(before, 2);
+a = separateChannels(after, 3);
+toc
 %% Find best matching slices for each channel
 
 % note this can take over an hour
@@ -39,7 +40,7 @@ a = uint16(separateChannels(after, numChans));
 % [matchingSlices, corrMat] = matchSlices(b, a);
 % toc
 
-matchingSlices = [4, 2; 5, 5; 1, 12; 9, 11];
+matchingSlices = [4, 2]%; 5, 5; 1, 12; 9, 11];
 % 
 % figure, 
 % for C = 1:numChans    
@@ -102,7 +103,7 @@ simpD = imresize(D, 1/13);
 % simpD = D;
 
 
-[x,y] = meshgrid(0:size(D,1)-1, 0:size(D,2)-1);
+[x,y] = meshgrid(0:13:size(D,1)-1, 0:13:size(D,2)-1);
 u = simpD(:,:,1);
 v = simpD(:,:,2);
 
@@ -113,7 +114,7 @@ hold on, quiver(x,y,-u,-v)
 
 %%
 
-[err, pDist] = quantifyDistortions2(D, movingRegistered);
+[err, pDist] = quantifyDistortion(D, movingRegistered);
 %%
 numBins = 100;
 [N, edges, bins] = histcounts(pDist, numBins);
@@ -140,23 +141,27 @@ ylabel('error (px)')
 function I = loadTif(tifFile)
 % Load tiff file to array
 
-    info = imfinfo(tifFile);
-    tampon = imread(tifFile,'Index',1);
-    F = length(info);
-    I = zeros(size(tampon,1),size(tampon,2),F,'uint16');
-    I(:,:,1) = tampon(:,:,1);
-    tic
-    wait_bar = waitbar(0,['Loading ',tifFile]);
-    ind = 0;
-    for i = 2:F
-        if ind == 0, waitbar(i/F, wait_bar); end
-        ind = ind + 1; if ind == 100, ind = 0; end
-        tampon = imread(tifFile,'Index',i,'Info',info);
-        I(:,:,i) = tampon(:,:,1);
-    end
-    close(wait_bar);
-    temps = num2str(round(10*toc)/10);
-    disp([tifFile ' open in ' num2str(temps) 's'])
+warning('off', 'MATLAB:handle_graphics:exceptions:SceneNode')
+
+info = imfinfo(tifFile);
+tampon = imread(tifFile,'Index',1);
+F = length(info);
+I = zeros(size(tampon,1),size(tampon,2),F,'uint16');
+I(:,:,1) = tampon(:,:,1);
+tic
+wait_bar = waitbar(0,['Loading ',tifFile]);
+ind = 0;
+for i = 2:F
+    if ind == 0, waitbar(i/F, wait_bar); end
+    ind = ind + 1; if ind == 100, ind = 0; end
+    tampon = imread(tifFile,'Index',i,'Info',info);
+    I(:,:,i) = tampon(:,:,1);
+end
+close(wait_bar);
+temps = num2str(round(10*toc)/10);
+disp([tifFile ' open in ' num2str(temps) 's'])
+
+warning('on', 'MATLAB:handle_graphics:exceptions:SceneNode')
 end
 
 
@@ -164,7 +169,9 @@ function sepData = separateChannels(data, numChans)
 % separate tif into 4D array
 % sepData is of shape HEIGHT x WIDTH x DEPTH x CHANNEL
 
-sepData = zeros(size(data,1), size(data,2), size(data,3)/numChans, numChans);
+sepData = uint16(...
+    zeros(size(data,1), size(data,2), size(data,3)/numChans, numChans)...
+    );
 for C = 1:numChans
     sepData(:,:,:,C) = data(:,:,C:numChans:end);
 end
@@ -242,82 +249,7 @@ end
 
 
 
-function [relError, pDist] = quantifyDistortion(D)
-
-[H, W, ~] = size(D);
-D2 = reshape(D, [H*W, 2]);
-
-% preallocate
-relError = zeros( (H*W)^2, 1);
-pDist = zeros( (H*W)^2, 1);
-
-count = 1;
-for i = 1:size(D2,1)
-    for j = 1:size(D2,1)              
-        % get pixel locations
-        [y1, x1] = ind2sub([H W], i);
-        [y2, x2] = ind2sub([H W], j);
-        
-        % calculate pixel to pixel distance
-        pDist(count) = sqrt( (x1 - x2)^2 + (y1 - y2)^2);        
-        
-        % calculate difference between vectors at two points
-        relError(count) = sqrt(...
-            (D(y1,x1,1)-D(y2,x2,1))^2 + (D(y1,x1,2)-D(y2,x2,2))^2 );
-        
-        % update counter
-        count = count+1;
-    end
-end
-end
-
-
-
-function [err, pDist] = quantifyDistortion2(D, movingRegistered)
-
-% threshold image using Otsu's method
-level = graythresh(movingRegistered);
-mask = imbinarize(movingRegistered, level);
-
-% mask vector field and get x and y vectors in 2 arrays
-maskD = D .* mask;
-X = maskD(:,:,1);
-Y = maskD(:,:,2);
-
-% get indices for all mask vectors
-[row, col] = find(X~=0);
-
-% preallocate
-N = numel(row);
-pDist = zeros(N^2, 1);
-err = zeros(N^2, 1);
-
-count = 1;
-
-for i = 1:N
-    % get pixel coordinates
-    yi = row(i);     xi = col(i);
-    for j = 1:N
-        % get pixel coordinates
-        yj = row(j);     xj = col(j);
-        
-        % calculate pixel to pixel distance
-        pDist(count) = sqrt( (xi-xj)^2 + (yi-yj)^2 );
-        
-        % calculate difference between vectors
-        err(count) = sqrt( (X(yi,xi)-X(yj,xj))^2 + (Y(yi,xi)-Y(yj,xj))^2 );
-    
-        % update counter
-        count = count+1;
-    end
-end
-
-end
-
-
-
-
-function [err, pDist] = quantifyDistortion2(D, movingRegistered)
+function [err, pDist] = quantifyDistortion(D, movingRegistered)
 
 % threshold image using Otsu's method
 level = graythresh(movingRegistered);
