@@ -1,0 +1,1 @@
+elastix -f output/Image61_Green_Channel/3D_BSpline/Elastix_3D_BSpline_Dir/Elastix_3D_BSpline_Dir_target.mhd -m output/Image61_Green_Channel/3D_BSpline/Elastix_3D_BSpline_Dir/Elastix_3D_BSpline_Dir_moving.mhd -out output/Image61_Green_Channel/3D_BSpline/Elastix_3D_BSpline_Dir -p output/Image61_Green_Channel/3D_BSpline/Elastix_3D_BSpline_Dir/Parameters_BSpline3D.txt 

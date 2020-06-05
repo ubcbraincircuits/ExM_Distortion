@@ -1,0 +1,167 @@
+clear; clc; close all;
+
+restoredefaultpath;
+addpath(genpath('lib/'));
+addpath('param_files/');
+suptitleStr = 'Image61 Green Channel';
+
+DataPath = '../Stripping_Data/';
+ElastixPath = '/Users/abhijitc/Documents/Software/elastix-5.0.0-mac/bin';
+MainPath = sprintf('%s/',strrep(suptitleStr,' ','_'));
+PlotPath = sprintf('%s/Plots/',strrep(suptitleStr,' ','_')); 
+mkdir(PlotPath);
+
+%% Load TIF files
+
+before = LoadTif([DataPath, '61-BeforeStripping.tif']);
+after = LoadTif([DataPath, '61-AfterStripping.tif']);
+
+%% Separate channels
+
+numChans = 2;
+beforeIm = double(SeparateChannels(before, numChans));
+numChans = 3;
+afterIm = double(SeparateChannels(after, numChans));
+
+%% Resize Image
+
+dsF = 4; % Downsample factor
+sz = size(afterIm);
+afterIm = ResizeImage(afterIm, zeros(sz(1)/dsF, sz(2)/dsF, sz(3)));
+sz = size(beforeIm);
+beforeIm = ResizeImage(beforeIm, zeros(sz(1)/dsF, sz(2)/dsF, sz(3)));
+
+afterIm = afterIm(:,:,:,3);
+afterIm = uint8(255*(afterIm - min(afterIm(:)))./(max(afterIm(:)) - min(afterIm(:))));
+beforeIm = beforeIm(:,:,:,2);
+beforeIm = uint8(255*(beforeIm - min(beforeIm(:)))./(max(beforeIm(:)) - min(beforeIm(:))));
+afterIm = imhistmatchn(afterIm, beforeIm);
+
+%% 3D BSpline registration
+
+AnalysisDir = fullfile(MainPath,'3D_BSpline/'); mkdir(AnalysisDir);
+
+% Run 3D BSpline registration on elastix
+
+ElastixOutDir = fullfile(AnalysisDir,'Elastix_3D_BSpline_Dir/');
+[aBSpline3d, ~] = ElastixRegistration(afterIm,beforeIm,ElastixOutDir,{'Parameters_BSpline3D.txt'},ElastixPath);
+aBSpline3d = uint8(aBSpline3d);
+
+% Generate distortion vetors
+
+PixStep = 10;
+InputFileName = fullfile(AnalysisDir,'InputVectors3D.txt'); % Give any name - this file will be generated
+TransformixOutDir = fullfile(AnalysisDir,'Transformix_Dir/');
+ParamFile = fullfile(ElastixOutDir,'TransformParameters.0.txt');
+DistortionStruct = GenDistortionVectors(afterIm, PixStep, InputFileName, ElastixPath, TransformixOutDir, ParamFile);
+
+% Match slices to find the best match
+
+Slices.before = 1:PixStep:size(beforeIm,3);
+Slices.after = 1:PixStep:size(aBSpline3,3);
+[matchSliceIdx, corrMat] = MatchSlices(beforeIm, aBSpline3d, 'None', Slices);
+DistortionStructMatch = SelectDistortionSlice(DistortionStruct, matchSliceIdx(1), 3);
+
+% Plot the matched slices
+
+PlotBestMatchSlices(corrMat, beforeIm(:,:,matchSliceIdx(1)), afterIm(:,:,matchSliceIdx(1)), ...
+    aBSpline3d(:,:,matchSliceIdx(1)), DistortionStructMatch, suptitleStr, PlotPath);
+
+% Plot distortion 
+
+PlotDistortion(pDist, err, nbins, PlotPath);
+[err, pDist] = QuantifyDistortion2(DistortionStruct.InputPoints, DistortionStruct.TransPoints, afterIm);
+
+% Save Results in a .mat file
+
+save(fullfile(AnalysisDir,'3D_Spline_Results.mat'), 'beforeIm', 'afterIm', 'aBSpline3d', 'matchingSlices','corrMat');
+
+%%
+%
+%% 3D Rigid registration + 2D BSpline
+
+AnalysisDir = fullfile(MainPath,'3D_Rigid_2D_BSpline/'); mkdir(AnalysisDir);
+
+% Run 3D Rigid registration on elastix
+
+ElastixOutDir = fullfile(AnalysisDir,'Elastix_3D_Rigid_Dir/');
+[aRigid3d, ~] = ElastixRegistration(afterIm,beforeIm,ElastixOutDir,{'Parameters_Rigid3D.txt'},ElastixPath);
+aRigid3d = uint8(aRigid3d);
+
+% Match slices to find the best match
+
+PixStep = 10;
+Slices.before = 1:PixStep:size(beforeIm,3);
+Slices.after = 1:PixStep:size(aRigid3d,3);
+[matchSliceIdx, corrMat] = MatchSlices(beforeIm, aRigid3d, 'None', Slices);
+
+% Run 2D BSpline registration for the best match slices on elastix
+
+ElastixOutDir = fullfile(AnalysisDir,'Elastix_2D_BSpline_Dir/');
+[aBSpline2D, ~] = ElastixRegistration(aRigid3d(:,:,matchSliceIdx(2)),beforeIm(:,:,matchSliceIdx(1)),ElastixOutDir,{'Parameters_BSpline.txt'},ElastixPath);
+aBSpline2D = uint8(aBSpline2D);
+
+% Generate distortion vetors
+
+InputFileName = fullfile(AnalysisDir,'InputVectors2D.txt'); % Give any name - this file will be generated
+TransformixOutDir = fullfile(AnalysisDir,'Transformix_Dir/');
+ParamFile = fullfile(AnalysisDir,'TransformParameters.0.txt');
+DistortionStruct = GenDistortionVectors(aRigid3d(:,:,matchSliceIdx(2)), PixStep, InputFileName, ElastixPath, TransformixOutDir, ParamFile);
+
+% Plot the matched slices
+
+PlotBestMatchSlices(corrMat, beforeIm(:,:,matchSliceIdx(1)), aRigid3d(:,:,matchSliceIdx(2)), ...
+    aBSpline2D, DistortionStruct, suptitleStr, PlotPath);
+
+% Plot distortion 
+
+PlotDistortion(pDist, err, nbins, PlotPath);
+[err, pDist] = QuantifyDistortion2(DistortionStruct.InputPoints, DistortionStruct.TransPoints, aRigid3d(:,:,matchSliceIdx(2)));
+
+% Save Results in a .mat file
+
+save(fullfile(AnalysisDir,'3D_Rigid_2D_Spline_Results.mat'), 'beforeIm', 'afterIm', 'aBSpline3d', 'matchingSlices','corrMat');
+
+%%
+%
+%% 2D Rigid registration + 2D BSpline
+
+AnalysisDir = fullfile(MainPath,'2D_Rigid_2D_BSpline/'); mkdir(AnalysisDir);
+
+% Match slices after 2D rigid registration to find the best match
+
+PixStep = 10;
+Slices.before = 1:PixStep:size(beforeIm,3);
+Slices.after = 1:PixStep:size(afterIm,3);
+[matchSliceIdx, corrMat] = MatchSlices(beforeIm, afterIm, 'Elastix', Slices, 'OutputDir', fullfile(AnalysisDir,'T'));
+
+% Run 2D Rigid + 2D BSpline registration for the best match slices on elastix
+
+ElastixOutDir = fullfile(AnalysisDir,'Elastix_2D_Rigid_Dir/');
+[aRigid2D, ~] = ElastixRegistration(afterIm(:,:,matchSliceIdx(2)),beforeIm(:,:,matchSliceIdx(1)),ElastixOutDir,{'Parameters_Rigid.txt'},ElastixPath);
+aRigid2D = uint8(aRigid2D);
+
+ElastixOutDir = fullfile(AnalysisDir,'Elastix_2D_BSpline_Dir/');
+[aBSpline2D, ~] = ElastixRegistration(aRigid2D,beforeIm(:,:,matchSliceIdx(1)),ElastixOutDir,{'Parameters_BSpline.txt'},ElastixPath);
+aBSpline2D = uint8(aBSpline2D);
+
+% Generate distortion vetors
+
+InputFileName = fullfile(AnalysisDir,'InputVectors2D.txt'); % Give any name - this file will be generated
+TransformixOutDir = fullfile(AnalysisDir,'Transformix_Dir/');
+ParamFile = fullfile(AnalysisDir,'TransformParameters.0.txt');
+DistortionStruct = GenDistortionVectors(aRigid2D, PixStep, InputFileName, ElastixPath, TransformixOutDir, ParamFile);
+
+% Plot the matched slices
+
+PlotBestMatchSlices(corrMat, beforeIm(:,:,matchSliceIdx(1)), aRigid2D, ...
+    aBSpline2D, DistortionStruct, suptitleStr, PlotPath);
+
+% Plot distortion 
+
+PlotDistortion(pDist, err, nbins, PlotPath);
+[err, pDist] = QuantifyDistortion2(DistortionStruct.InputPoints, DistortionStruct.TransPoints, aRigid2D);
+
+% Save Results in a .mat file
+
+save(fullfile(AnalysisDir,'2D_Rigid_2D_Spline_Results.mat'), 'beforeIm', 'afterIm', 'aRigid2D', 'aBSpline3d', 'matchingSlices','corrMat');

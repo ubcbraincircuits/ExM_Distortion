@@ -1,0 +1,1 @@
+elastix -f output/Image62_Green_Channel/2D_Rigid_2D_BSpline/Temp/Temp_target.mhd -m output/Image62_Green_Channel/2D_Rigid_2D_BSpline/Temp/Temp_moving.mhd -out output/Image62_Green_Channel/2D_Rigid_2D_BSpline/Temp -p output/Image62_Green_Channel/2D_Rigid_2D_BSpline/Temp/Parameters_Rigid.txt 
