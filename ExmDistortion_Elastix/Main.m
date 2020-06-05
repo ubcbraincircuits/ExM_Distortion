@@ -17,10 +17,10 @@ after = LoadTif([DataPath, '62-AfterStripping.tif']);
 
 %% Separate channels
 
-numChans = 2;
-beforeIm = double(SeparateChannels(before, numChans));
-numChans = 2;
-afterIm = double(SeparateChannels(after, numChans));
+numChansB = input('Enter no. of channels in before image = ');
+beforeIm = double(SeparateChannels(before, numChansB));
+numChansA = input('Enter no. of channels in after image = ');
+afterIm = double(SeparateChannels(after, numChansA));
 
 %% Resize Image
 
@@ -30,9 +30,12 @@ afterIm = ResizeImage(afterIm, zeros(sz(1)/dsF, sz(2)/dsF, sz(3)));
 sz = size(beforeIm);
 beforeIm = ResizeImage(beforeIm, zeros(sz(1)/dsF, sz(2)/dsF, sz(3)));
 
-afterIm = afterIm(:,:,:,1);
+ChanSelB = input('Enter the channel for analysis in before image = ');
+ChanSelA = input('Enter the channel for analysis in after image = ');
+
+afterIm = afterIm(:,:,:,ChanSelA);
 afterIm = uint8(255*(afterIm - min(afterIm(:)))./(max(afterIm(:)) - min(afterIm(:))));
-beforeIm = beforeIm(:,:,:,2);
+beforeIm = beforeIm(:,:,:,ChanSelB );
 beforeIm = uint8(255*(beforeIm - min(beforeIm(:)))./(max(beforeIm(:)) - min(beforeIm(:))));
 afterIm = imhistmatchn(afterIm, beforeIm);
 
